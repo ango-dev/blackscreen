@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:,">
+<title>Black Screen</title>
+<style>
+  :root { color-scheme: dark; }
+  [hidden] { display: none !important; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 14px/1.4 system-ui, sans-serif;
+    color: #777;
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 16px;
+    transition: opacity 0.4s;
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  button, select, input {
+    font: inherit;
+    color: #888;
+    background: #000;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 10px 14px;
+  }
+  button { cursor: pointer; }
+  input { width: 6em; }
+  button:hover, button:focus-visible,
+  select:hover, select:focus-visible,
+  input:hover, input:focus-visible {
+    color: #bbb;
+    border-color: #666;
+    outline: none;
+  }
+  .hint, .popup-hint {
+    margin: 0;
+    font-size: 12px;
+    color: #555;
+    text-align: center;
+  }
+  .popup-hint { display: none; transition: opacity 0.4s; }
+
+  .exit {
+    display: none;
+    position: fixed;
+    left: 50%;
+    bottom: 32px;
+    transform: translateX(-50%);
+    transition: opacity 0.4s;
+  }
+
+  #toast {
+    position: fixed;
+    left: 50%;
+    top: 32px;
+    transform: translateX(-50%);
+    max-width: 80vw;
+    text-align: center;
+    color: #999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s;
+  }
+  #toast.show { opacity: 1; }
+
+  /* Fullscreen: only a small exit control, and only while the mouse is moving */
+  body.fs .panel, body.fs .popup-hint { display: none; }
+  body.fs .exit { display: block; }
+
+  /* Secondary windows opened by "Open on all screens" */
+  body.popup .panel { display: none; }
+  body.popup:not(.fs) .popup-hint { display: block; }
+
+  /* Idle: nothing lit at all, cursor included */
+  body.idle { cursor: none; }
+  body.idle .panel, body.idle .exit, body.idle .popup-hint {
+    opacity: 0;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<main class="panel" id="panel">
+  <div class="row">
+    <button id="fs" type="button">Enter fullscreen</button>
+    <button id="all" type="button">Open on all screens</button>
+  </div>
+  <div class="row">
+    <select id="preset" aria-label="Image size">
+      <option value="854x480">480p · 854 × 480</option>
+      <option value="1280x720">720p · 1280 × 720</option>
+      <option value="1920x1080" selected>1080p · 1920 × 1080</option>
+      <option value="2560x1440">1440p · 2560 × 1440</option>
+      <option value="3840x2160">4K · 3840 × 2160</option>
+      <option value="5120x2880">5K · 5120 × 2880</option>
+      <option value="7680x4320">8K · 7680 × 4320</option>
+      <option value="1080x1920">Phone · 1080 × 1920</option>
+      <option value="custom">Custom size</option>
+    </select>
+    <span class="row" id="custom" hidden>
+      <input id="w" type="number" min="1" max="16384" step="1" value="1920" aria-label="Width in pixels">
+      <span aria-hidden="true">×</span>
+      <input id="h" type="number" min="1" max="16384" step="1" value="1080" aria-label="Height in pixels">
+    </span>
+    <button id="dl" type="button">Download PNG</button>
+  </div>
+  <p class="hint">Double-click or press F for fullscreen · Esc to exit</p>
+</main>
+
+<p class="popup-hint">Click anywhere for fullscreen</p>
+<button id="exit" class="exit" type="button">Exit</button>
+<div id="toast" role="status"></div>
+
+<script>
+  const IDLE_MS = 3000;        // hide controls after this long without input
+  const FIELD_HOLD_MS = 60000; // keep controls up at most this long while a field is focused
+  const MAX_SIDE = 16384;
+
+  const body = document.body;
+  const root = document.documentElement;
+  const panel = document.getElementById('panel');
+  const toast = document.getElementById('toast');
+  const preset = document.getElementById('preset');
+  const custom = document.getElementById('custom');
+  const wInput = document.getElementById('w');
+  const hInput = document.getElementById('h');
+
+  const isPopup = new URLSearchParams(location.search).has('popup');
+  const channel = 'BroadcastChannel' in window ? new BroadcastChannel('black-screen') : null;
+
+  let popups = [];
+  let wasFullscreen = false;
+  let lastActivity = Date.now();
+  let idleTimer;
+  let toastTimer;
+
+  if (isPopup) body.classList.add('popup');
+
+  /* ---------- fullscreen ---------- */
+
+  const isFullscreen = () =>
+    !!(document.fullscreenElement || document.webkitFullscreenElement);
+
+  function enter(options) {
+    const req = root.requestFullscreen || root.webkitRequestFullscreen;
+    if (!req) return Promise.reject(new Error('Fullscreen is not supported'));
+    return Promise.resolve(req.call(root, options));
+  }
+
+  function exit() {
+    if (!isFullscreen()) return;
+    const ex = document.exitFullscreen || document.webkitExitFullscreen;
+    if (ex) Promise.resolve(ex.call(document)).catch(() => {});
+  }
+
+  function toggle() {
+    if (isFullscreen()) closeAll();
+    else enter().catch(() => {});
+  }
+
+  /* ---------- all screens ---------- */
+
+  async function openAll() {
+    if (!('getScreenDetails' in window)) {
+      say('Multi-screen needs Chrome or Edge, and this page served from localhost or over HTTPS.');
+      return;
+    }
+    let details;
+    try {
+      details = await window.getScreenDetails();
+    } catch {
+      say('Allow the window-management permission to use all screens.');
+      return;
+    }
+    try {
+      await enter({ screen: details.currentScreen });
+    } catch {
+      // The permission prompt can outlast the click that started this
+      say('Permission granted. Click "Open on all screens" once more.');
+      return;
+    }
+    let blocked = 0;
+    for (const s of details.screens) {
+      if (s === details.currentScreen) continue;
+      const features = 'popup,fullscreen' +
+        ',left=' + s.availLeft + ',top=' + s.availTop +
+        ',width=' + s.availWidth + ',height=' + s.availHeight;
+      const win = window.open(location.pathname + '?popup=1', '_blank', features);
+      if (win) popups.push(win);
+      else blocked++;
+    }
+    if (blocked) {
+      say('Some screens were blocked. Allow pop-ups for this site, then try again.');
+    }
+  }
+
+  // Closes every window this page opened and leaves fullscreen everywhere
+  function closeAll() {
+    if (channel) channel.postMessage('close');
+    closeLocal();
+  }
+
+  function closeLocal() {
+    if (isPopup) {
+      window.close();
+      return;
+    }
+    popups.forEach((win) => { try { win.close(); } catch {} });
+    popups = [];
+    exit();
+  }
+
+  if (channel) {
+    channel.onmessage = (e) => { if (e.data === 'close') closeLocal(); };
+  }
+
+  /* ---------- PNG download ---------- */
+
+  function chosenSize() {
+    if (preset.value !== 'custom') return preset.value.split('x').map(Number);
+    return [Number(wInput.value), Number(hInput.value)];
+  }
+
+  function download() {
+    const [w, h] = chosenSize();
+    const ok = (n) => Number.isInteger(n) && n >= 1 && n <= MAX_SIDE;
+    if (!ok(w) || !ok(h)) {
+      say('Width and height must be whole numbers from 1 to ' + MAX_SIDE + '.');
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) {
+      say('This browser could not create an image that large.');
+      return;
+    }
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, w, h);
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        say('This browser could not create an image that large.');
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'black-' + w + 'x' + h + '.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }, 'image/png');
+  }
+
+  /* ---------- messages ---------- */
+
+  function say(text) {
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 6000);
+  }
+
+  /* ---------- idle handling ---------- */
+
+  function arm() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(goIdle, IDLE_MS);
+  }
+
+  function wake() {
+    lastActivity = Date.now();
+    body.classList.remove('idle');
+    arm();
+  }
+
+  function goIdle() {
+    const el = document.activeElement;
+    const inField = el && panel.contains(el) && /^(INPUT|SELECT)$/.test(el.tagName);
+    const holding = !isFullscreen() && (inField || panel.matches(':hover'));
+    if (holding && Date.now() - lastActivity < FIELD_HOLD_MS) {
+      arm();
+      return;
+    }
+    body.classList.add('idle');
+  }
+
+  function onFullscreenChange() {
+    const fs = isFullscreen();
+    body.classList.toggle('fs', fs);
+    if (wasFullscreen && !fs) {
+      // Esc in any window ends the whole session
+      if (isPopup) window.close();
+      else closeAll();
+    }
+    wasFullscreen = fs;
+    wake();
+  }
+
+  /* ---------- wiring ---------- */
+
+  const inPanel = (target) => target instanceof Node && panel.contains(target);
+
+  document.getElementById('fs').addEventListener('click', () => enter().catch(() => {}));
+  document.getElementById('all').addEventListener('click', openAll);
+  document.getElementById('dl').addEventListener('click', download);
+  document.getElementById('exit').addEventListener('click', closeAll);
+
+  preset.addEventListener('change', () => {
+    const isCustom = preset.value === 'custom';
+    custom.hidden = !isCustom;
+    if (isCustom) wInput.focus();
+    else preset.blur();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (isPopup && !isFullscreen() && e.target.id !== 'exit') enter().catch(() => {});
+  });
+
+  document.addEventListener('dblclick', (e) => {
+    if (!inPanel(e.target) && e.target.id !== 'exit') toggle();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    wake();
+    if (/^(INPUT|SELECT)$/.test(e.target.tagName)) return;
+    if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) toggle();
+  });
+
+  ['mousemove', 'mousedown', 'touchstart'].forEach((evt) =>
+    document.addEventListener(evt, wake, { passive: true })
+  );
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+  wake();
+</script>
+</body>
+</html>
