@@ -16,6 +16,9 @@ docker compose up -d --build
 Then open <http://localhost:8080>. The container is named `blackscreen` and
 restarts automatically unless you stop it.
 
+The icon is served at `/favicon.ico` (for example
+<http://localhost:8080/favicon.ico>), for dashboards that need an icon URL.
+
 Stop it with:
 
 ```bash
