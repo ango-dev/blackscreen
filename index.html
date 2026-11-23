@@ -151,7 +151,7 @@
   const hInput = document.getElementById('h');
 
   const isPopup = new URLSearchParams(location.search).has('popup');
-  const channel = 'BroadcastChannel' in window ? new BroadcastChannel('black-screen') : null;
+  const channel = 'BroadcastChannel' in window ? new BroadcastChannel('blackscreen') : null;
 
   let popups = [];
   let wasFullscreen = false;

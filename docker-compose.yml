@@ -1,8 +1,8 @@
 services:
-  black-screen:
+  blackscreen:
     build: .
-    image: black-screen
-    container_name: black-screen
+    image: blackscreen
+    container_name: blackscreen
     ports:
       - "8080:80"
     restart: unless-stopped

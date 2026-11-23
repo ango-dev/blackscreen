@@ -1,4 +1,4 @@
-# black-screen
+# blackscreen
 
 A self-hosted, pure black (`#000`) page for OLED displays. On an OLED panel, black
 pixels are switched off completely. The controls and the mouse cursor hide after
@@ -13,7 +13,7 @@ served by nginx in Docker.
 docker compose up -d --build
 ```
 
-Then open <http://localhost:8080>. The container is named `black-screen` and
+Then open <http://localhost:8080>. The container is named `blackscreen` and
 restarts automatically unless you stop it.
 
 Stop it with:
